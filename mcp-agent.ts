@@ -371,7 +371,9 @@ async function executeCustomFunction(
     const imageUrl = functionArgs.imageUrl;
 
     try {
-      console.log(`🖼️ Analyzing image: ${imageUrl}`);
+      console.log(`\n🖼️  Starting image analysis...`);
+      console.log(`📍 Image URL: ${imageUrl}`);
+      console.log(`⏳ Calling OpenAI Vision API...`);
 
       // OpenAI Vision API 호출
       const visionResponse = await openai.chat.completions.create({
@@ -399,29 +401,47 @@ async function executeCustomFunction(
       const description =
         visionResponse.choices[0]?.message?.content ||
         "Could not analyze the image.";
-      console.log(`📝 Image description: ${description}`);
+
+      console.log(`✅ Image analysis complete!`);
+      console.log(
+        `📝 Description: ${description.substring(0, 100)}${
+          description.length > 100 ? "..." : ""
+        }`
+      );
+
+      const result = {
+        success: true,
+        imageUrl: imageUrl,
+        description: description,
+      };
+
+      const resultString = JSON.stringify(result, null, 2);
+      console.log(`📨 Tool Result:`, resultString);
 
       // 결과를 히스토리에 추가
       chatHistory.push({
         role: "tool",
         tool_call_id: toolCallId,
-        content: JSON.stringify({
-          success: true,
-          imageUrl: imageUrl,
-          description: description,
-        }),
+        content: resultString,
       });
     } catch (error) {
       console.error(`❌ Error analyzing image:`, error);
+
+      const errorResult = {
+        error: true,
+        message: error instanceof Error ? error.message : String(error),
+      };
+
+      console.log(
+        `📨 Tool Result (Error):`,
+        JSON.stringify(errorResult, null, 2)
+      );
 
       // 에러 결과를 히스토리에 추가
       chatHistory.push({
         role: "tool",
         tool_call_id: toolCallId,
-        content: JSON.stringify({
-          error: true,
-          message: error instanceof Error ? error.message : String(error),
-        }),
+        content: JSON.stringify(errorResult),
       });
     }
   }
