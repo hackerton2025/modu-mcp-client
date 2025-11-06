@@ -1,3 +1,11 @@
+dependency: https://github.com/hangwin/mcp-chrome
+
+```
+npm install -g mcp-chrome-bridge
+```
+
+install mcp-chrome-bridge before use
+
 to run: npm run start
 
 .env example
