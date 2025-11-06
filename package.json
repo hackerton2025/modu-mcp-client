@@ -1,0 +1,38 @@
+{
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.21.0",
+    "@playwright/mcp": "^0.0.45",
+    "ai": "^5.0.87",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "mcp-client": "^1.13.1",
+    "ollama": "^0.6.2",
+    "ollama-ai-provider": "^1.2.0",
+    "openai": "^6.8.1",
+    "playwright": "^1.56.1"
+  },
+  "name": "hackathon-demo",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.5",
+    "@types/node": "^24.10.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "scripts": {
+    "start": "node --loader ts-node/esm index.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "ts-node": {
+    "esm": true,
+    "experimentalSpecifierResolution": "node"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module"
+}
