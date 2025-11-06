@@ -44,6 +44,28 @@ const ESTIMATED_CHARS_PER_TOKEN = 4; // 평균적으로 1토큰 = 4자
 const MAX_CONTEXT_CHARS = MAX_CONTEXT_TOKENS * ESTIMATED_CHARS_PER_TOKEN; // 약 800k 문자
 const TRIM_THRESHOLD = MAX_CONTEXT_CHARS * 0.8; // 80% 도달시 트리밍 시작
 
+// MCP 도구들을 OpenAI Function Calling 형식으로 저장
+let openAITools: OpenAI.Chat.ChatCompletionTool[] = [];
+
+/**
+ * MCP Tool을 OpenAI Function 형식으로 변환
+ */
+function convertMCPToolToOpenAIFunction(
+  mcpTool: any
+): OpenAI.Chat.ChatCompletionTool {
+  return {
+    type: "function",
+    function: {
+      name: mcpTool.name,
+      description: mcpTool.description || "No description provided",
+      parameters: mcpTool.inputSchema || {
+        type: "object",
+        properties: {},
+      },
+    },
+  };
+}
+
 /**
  * MCP 클라이언트 초기화 및 시스템 프롬프트 설정
  * 최초 1회만 실행됨
@@ -56,39 +78,17 @@ async function initialize() {
   console.log("✅ Connected to MCP Server");
 
   // MCP 툴 목록 가져오기
-  const tools = await client.getAllTools();
+  const mcpTools = await client.getAllTools();
   console.log(
     "🧰 Available MCP Tools:",
-    tools.map((t: any) => t.name).join(", ")
+    mcpTools.map((t: any) => t.name).join(", ")
   );
 
-  // MCP 도구 안내 문구(system prompt) 생성
-  const toolDescriptions = tools
-    .map((t: any) => `- ${t.name}: ${t.description || "No description"}`)
-    .join("\n");
+  // MCP 도구를 OpenAI Function 형식으로 변환
+  openAITools = mcpTools.map(convertMCPToolToOpenAIFunction);
 
   const systemPrompt = `
-You are an assistant connected to an MCP server.
-You can call the following tools by outputting a JSON object in this format:
-
-{
-  "tool": "<tool_name>",
-  "arguments": { ... }
-}
-
-Available tools:
-${toolDescriptions}
-
-When you want to use a tool, output only the JSON object (no explanation or extra text).
-
-IMPORTANT: You can use multiple tools in sequence to complete a task.
-After each tool execution, you will see the result and can decide to:
-1. Use another tool by outputting another JSON object
-2. Complete the task by outputting: {"done": true, "message": "your final response to the user"}
-3. You can call only one tool at once. Do not output any text after the first JSON object.
-
-When you output {"done": true, "message": "..."}, the conversation will end and the user will see your final message.
-In the final message, please ask the user what else they would like to do next with recommendations.
+You are a helpful assistant with access to various tools through function calling.
 
 CRITICAL RULES - Follow these strictly:
 1. NEVER take screenshots unless the user explicitly asks for it. Screenshots are only for when the user specifically requests to capture the screen.
@@ -102,7 +102,8 @@ CRITICAL RULES - Follow these strictly:
    - Then submit the search (press Enter or click search button)
 6. Do not assume the user wants extra features or actions beyond their request.
 7. Refrain from using tools that are far from the behavior of the general user, such as 'chrome_inject_script'.
-8. If you fails to click a button or link, you can try read hyperlink on the element and navigate to that URL instead.
+8. If you fail to click a button or link, you can try to read the hyperlink on the element and navigate to that URL instead.
+9. Do not use 'newWindow: true' option in tool calls. User wants to keep all actions in the same window.
 
 TTS-FRIENDLY OUTPUT GUIDELINES - Your responses will be converted to speech:
 1. Write in natural, conversational language as if speaking directly to someone
@@ -117,17 +118,7 @@ TTS-FRIENDLY OUTPUT GUIDELINES - Your responses will be converted to speech:
    - Don't say "5+3=8" - say "five plus three equals eight"
 8. Keep sentences flowing naturally, as if you're having a spoken conversation
 9. For recommendations, weave them naturally into your response rather than listing them
-
-GOOD TTS EXAMPLE: 
-"I found three interesting options for you. First, there's a Italian restaurant nearby with great reviews. Second, you might like the new sushi place that just opened. And finally, there's a cozy cafe that serves excellent pastries. What would you like to know more about?"
-
-BAD TTS EXAMPLE:
-"Here are the results:
-1. **Italian Restaurant** - Great reviews (4.5/5)
-2. **Sushi Place** - Newly opened
-3. **Cafe** - Excellent pastries
-
-What else would you like to do?"
+10. At the end of your response, naturally ask the user what else they would like to do or explore
 `;
 
   // 시스템 프롬프트를 채팅 히스토리에 추가
@@ -225,77 +216,106 @@ export async function executeCommand(userCommand: string): Promise<string> {
   trimHistory();
 
   try {
-    // Agent 루프: 최대 10회 반복
-    const MAX_ITERATIONS = 10;
+    // Agent 루프: 최대 20회 반복 (function calling은 더 많은 반복이 필요할 수 있음)
+    const MAX_ITERATIONS = 20;
     let iteration = 0;
-    let taskComplete = false;
     let finalMessage = "";
 
-    while (!taskComplete && iteration < MAX_ITERATIONS) {
+    while (iteration < MAX_ITERATIONS) {
       iteration++;
       console.log(`\n🔄 Iteration ${iteration}/${MAX_ITERATIONS}`);
 
-      // OpenAI API 호출 (Chat Completions)
+      // OpenAI API 호출 (Chat Completions with Function Calling)
       const completion = await openai.chat.completions.create({
         model: MODEL,
         messages: chatHistory,
+        tools: openAITools,
+        tool_choice: "auto", // AI가 필요할 때 자동으로 함수 호출
       });
 
-      const llmOutput = completion.choices[0]?.message?.content?.trim() || "";
-      console.log("\n🤖 AI:", llmOutput);
-
-      // LLM 응답을 히스토리에 추가
-      chatHistory.push({ role: "assistant", content: llmOutput });
-
-      // LLM 출력이 JSON인지 확인
-      try {
-        const parsed = JSON.parse(llmOutput);
-
-        // 작업 완료 확인
-        if (parsed.done === true) {
-          console.log("\n✅ Task completed!");
-          if (parsed.message) {
-            console.log("📝 Final message:", parsed.message);
-            finalMessage = parsed.message;
-          }
-          taskComplete = true;
-          break;
-        }
-
-        // MCP 툴 실행
-        if (parsed.tool && parsed.arguments) {
-          console.log(`\n🔧 Using tool: ${parsed.tool}`);
-          const mcpResult = await client.callTool({
-            name: parsed.tool,
-            arguments: parsed.arguments,
-          });
-
-          const resultString = JSON.stringify(mcpResult, null, 2);
-          console.log("📨 Tool Result:", resultString);
-
-          // MCP 결과를 히스토리에 추가 (시스템 메시지로)
-          chatHistory.push({
-            role: "system",
-            content: `Tool execution result:\nTool: ${parsed.tool}\nResult: ${resultString}`,
-          });
-
-          // 매 툴 실행 후 히스토리 체크
-          trimHistory();
-        } else {
-          // JSON이지만 tool이나 done이 없는 경우
-          console.log("⚠️ Invalid JSON format. Ending iteration.");
-          taskComplete = true;
-        }
-      } catch {
-        // JSON이 아닌 경우는 일반 응답으로 처리하고 종료
-        finalMessage = llmOutput;
-        taskComplete = true;
+      const message = completion.choices[0]?.message;
+      if (!message) {
+        console.log("⚠️ No message received from OpenAI");
+        break;
       }
+
+      // AI 응답을 히스토리에 추가
+      chatHistory.push(message);
+
+      // Tool calls가 있는 경우
+      if (message.tool_calls && message.tool_calls.length > 0) {
+        console.log(
+          `\n🔧 AI requested ${message.tool_calls.length} tool call(s)`
+        );
+
+        // 모든 tool calls를 순차적으로 실행
+        for (const toolCall of message.tool_calls) {
+          // Type guard: function 타입만 처리
+          if (toolCall.type !== "function") {
+            console.log(`⚠️ Skipping non-function tool call: ${toolCall.type}`);
+            continue;
+          }
+
+          const functionName = toolCall.function.name;
+          const functionArgs = JSON.parse(toolCall.function.arguments);
+
+          console.log(`\n📞 Calling function: ${functionName}`);
+          console.log(`📝 Arguments:`, functionArgs);
+
+          try {
+            // MCP 툴 실행
+            const mcpResult = await client.callTool({
+              name: functionName,
+              arguments: functionArgs,
+            });
+
+            const resultString = JSON.stringify(mcpResult, null, 2)
+              .replaceAll("\\", "")
+              .replaceAll("&quot;", '"');
+
+            console.log("📨 Tool Result:", resultString);
+
+            // Tool 실행 결과를 히스토리에 추가
+            chatHistory.push({
+              role: "tool",
+              tool_call_id: toolCall.id,
+              content: resultString,
+            });
+          } catch (error) {
+            console.error(`❌ Error calling tool ${functionName}:`, error);
+
+            // 에러 발생 시에도 결과를 히스토리에 추가
+            chatHistory.push({
+              role: "tool",
+              tool_call_id: toolCall.id,
+              content: JSON.stringify({
+                error: true,
+                message: error instanceof Error ? error.message : String(error),
+              }),
+            });
+          }
+        }
+
+        // Tool 실행 후 다음 루프로 계속 (AI가 결과를 보고 다음 액션 결정)
+        continue;
+      }
+
+      // Tool calls가 없으면 일반 응답 - 작업 완료
+      if (message.content) {
+        console.log("\n🤖 AI:", message.content);
+        finalMessage = message.content;
+        break;
+      }
+
+      // content도 tool_calls도 없으면 종료
+      console.log("⚠️ No content or tool calls in response");
+      break;
     }
 
-    if (iteration >= MAX_ITERATIONS && !taskComplete) {
+    if (iteration >= MAX_ITERATIONS) {
       console.log("\n⚠️ Maximum iterations reached. Task may be incomplete.");
-      finalMessage = "Maximum iterations reached. Task may be incomplete.";
+      finalMessage =
+        finalMessage || "Maximum iterations reached. Task may be incomplete.";
     }
 
     console.log(); // 빈 줄 추가
