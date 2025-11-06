@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import { executeCommand } from "./mcp-agent.ts";
+import { executeCommand, clearHistory } from "./mcp-agent.ts";
 
 const app = express();
 const PORT = 3000;
@@ -20,6 +20,20 @@ app.post("/api/execute-command", async (req, res) => {
     res.json({ message: result });
   } catch (error: any) {
     console.error("실행 오류:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 디버깅용: 채팅 히스토리 초기화
+app.post("/api/clear-history", (req, res) => {
+  try {
+    clearHistory();
+    res.json({
+      success: true,
+      message: "채팅 히스토리가 초기화되었습니다",
+    });
+  } catch (error: any) {
+    console.error("히스토리 초기화 오류:", error);
     res.status(500).json({ error: error.message });
   }
 });

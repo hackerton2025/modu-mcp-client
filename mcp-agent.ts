@@ -47,6 +47,28 @@ const TRIM_THRESHOLD = MAX_CONTEXT_CHARS * 0.8; // 80% 도달시 트리밍 시�
 // MCP 도구들을 OpenAI Function Calling 형식으로 저장
 let openAITools: OpenAI.Chat.ChatCompletionTool[] = [];
 
+const customFunctions: OpenAI.Chat.ChatCompletionFunctionTool[] = [
+  {
+    type: "function",
+    function: {
+      name: "describe_image",
+      description:
+        "Returns string, the explanation of the content of an image given its URL.",
+      parameters: {
+        type: "object",
+        properties: {
+          imageUrl: {
+            type: "string",
+            description: "The URL of the image to describe.",
+          },
+        },
+      },
+    },
+  },
+];
+
+openAITools.push(...customFunctions);
+
 /**
  * MCP Tool을 OpenAI Function 형식으로 변환
  */
@@ -104,6 +126,7 @@ CRITICAL RULES - Follow these strictly:
 7. Refrain from using tools that are far from the behavior of the general user, such as 'chrome_inject_script'.
 8. If you fail to click a button or link, you can try to read the hyperlink on the element and navigate to that URL instead.
 9. Do not use 'newWindow: true' option in tool calls. User wants to keep all actions in the same window.
+10. When you are requested to analyze or describe an image, find 'img' element with 'chrome_get_web_content' tool and use its 'src' attribute as the imageUrl argument for 'describe_image' function.
 
 TTS-FRIENDLY OUTPUT GUIDELINES - Your responses will be converted to speech:
 1. Write in natural, conversational language as if speaking directly to someone
@@ -262,6 +285,15 @@ export async function executeCommand(userCommand: string): Promise<string> {
           console.log(`\n📞 Calling function: ${functionName}`);
           console.log(`📝 Arguments:`, functionArgs);
 
+          if (isCustomFunction(functionName)) {
+            await executeCustomFunction(
+              functionName,
+              functionArgs,
+              toolCall.id
+            );
+            continue;
+          }
+
           try {
             // MCP 툴 실행
             const mcpResult = await client.callTool({
@@ -323,6 +355,75 @@ export async function executeCommand(userCommand: string): Promise<string> {
   } catch (error) {
     console.error("❌ Error:", error);
     throw error;
+  }
+}
+
+function isCustomFunction(functionName: string) {
+  return customFunctions.some((func) => func.function.name === functionName);
+}
+
+async function executeCustomFunction(
+  functionName: string,
+  functionArgs: any,
+  toolCallId: string
+) {
+  if (functionName === "describe_image") {
+    const imageUrl = functionArgs.imageUrl;
+
+    try {
+      console.log(`🖼️ Analyzing image: ${imageUrl}`);
+
+      // OpenAI Vision API 호출
+      const visionResponse = await openai.chat.completions.create({
+        model: "gpt-5-mini",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Describe this image in detail. Focus on the main elements, colors, composition, and any text or important details visible in the image.",
+              },
+              {
+                type: "image_url",
+                image_url: {
+                  url: imageUrl,
+                },
+              },
+            ],
+          },
+        ],
+        max_tokens: 500,
+      });
+
+      const description =
+        visionResponse.choices[0]?.message?.content ||
+        "Could not analyze the image.";
+      console.log(`📝 Image description: ${description}`);
+
+      // 결과를 히스토리에 추가
+      chatHistory.push({
+        role: "tool",
+        tool_call_id: toolCallId,
+        content: JSON.stringify({
+          success: true,
+          imageUrl: imageUrl,
+          description: description,
+        }),
+      });
+    } catch (error) {
+      console.error(`❌ Error analyzing image:`, error);
+
+      // 에러 결과를 히스토리에 추가
+      chatHistory.push({
+        role: "tool",
+        tool_call_id: toolCallId,
+        content: JSON.stringify({
+          error: true,
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      });
+    }
   }
 }
 
