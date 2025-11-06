@@ -126,7 +126,7 @@ CRITICAL RULES - Follow these strictly:
 7. Refrain from using tools that are far from the behavior of the general user, such as 'chrome_inject_script'.
 8. If you fail to click a button or link, you can try to read the hyperlink on the element and navigate to that URL instead.
 9. Do not use 'newWindow: true' option in tool calls. User wants to keep all actions in the same window.
-10. When you are requested to analyze or describe an image, find 'img' element with 'chrome_get_web_content' tool and use its 'src' attribute as the imageUrl argument for 'describe_image' function.
+10. When you are requested to analyze or explain an image, find 'img' element with 'chrome_get_web_content' tool and use its 'src' attribute as the imageUrl argument for 'describe_image' function.
 
 TTS-FRIENDLY OUTPUT GUIDELINES - Your responses will be converted to speech:
 1. Write in natural, conversational language as if speaking directly to someone
@@ -295,16 +295,22 @@ export async function executeCommand(userCommand: string): Promise<string> {
           }
 
           try {
+            // MCP 툴 실행 시간 측정 시작
+            const startTime = Date.now();
+
             // MCP 툴 실행
             const mcpResult = await client.callTool({
               name: functionName,
               arguments: functionArgs,
             });
 
+            const executionTime = Date.now() - startTime;
+
             const resultString = JSON.stringify(mcpResult, null, 2)
               .replaceAll("\\", "")
               .replaceAll("&quot;", '"');
 
+            console.log(`⏱️  Execution time: ${executionTime}ms`);
             console.log("📨 Tool Result:", resultString);
 
             // Tool 실행 결과를 히스토리에 추가
@@ -375,6 +381,9 @@ async function executeCustomFunction(
       console.log(`📍 Image URL: ${imageUrl}`);
       console.log(`⏳ Calling OpenAI Vision API...`);
 
+      // 실행 시간 측정 시작
+      const startTime = Date.now();
+
       // OpenAI Vision API 호출
       const visionResponse = await openai.chat.completions.create({
         model: "gpt-5-mini",
@@ -398,11 +407,14 @@ async function executeCustomFunction(
         max_tokens: 500,
       });
 
+      const executionTime = Date.now() - startTime;
+
       const description =
         visionResponse.choices[0]?.message?.content ||
         "Could not analyze the image.";
 
       console.log(`✅ Image analysis complete!`);
+      console.log(`⏱️  Execution time: ${executionTime}ms`);
       console.log(
         `📝 Description: ${description.substring(0, 100)}${
           description.length > 100 ? "..." : ""
