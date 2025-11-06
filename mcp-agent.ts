@@ -53,21 +53,21 @@ const customFunctions: OpenAI.Chat.ChatCompletionFunctionTool[] = [
     function: {
       name: "describe_image",
       description:
-        "Returns string, the explanation of the content of an image given its URL.",
+        "Analyzes and describes the visual content of an image from a given URL. Use this function when you need to understand what's in an image, including objects, people, text, colors, layout, and context. The function returns a detailed textual description of the image content. By finding 'img' element with tool and using its 'src' attribute as the imageUrl argument.",
       parameters: {
         type: "object",
         properties: {
           imageUrl: {
             type: "string",
-            description: "The URL of the image to describe.",
+            description:
+              "The complete URL of the image to analyze. Must be a valid HTTP/HTTPS URL pointing to an image file (jpg, png, gif, etc.) or an accessible image resource.",
           },
         },
+        required: ["imageUrl"],
       },
     },
   },
 ];
-
-openAITools.push(...customFunctions);
 
 /**
  * MCP Tool을 OpenAI Function 형식으로 변환
@@ -108,25 +108,26 @@ async function initialize() {
 
   // MCP 도구를 OpenAI Function 형식으로 변환
   openAITools = mcpTools.map(convertMCPToolToOpenAIFunction);
+  openAITools.push(...customFunctions);
 
   const systemPrompt = `
 You are a helpful assistant with access to various tools through function calling.
+You're a browser agent AI for visual disabilities. Depending on the user request, help the user perform tasks and use your browser effectively.
 
 CRITICAL RULES - Follow these strictly:
 1. NEVER take screenshots unless the user explicitly asks for it. Screenshots are only for when the user specifically requests to capture the screen.
 2. When searching on websites (Google, etc.), ALWAYS use the search input field and type tool. DO NOT use URL query parameters like "?q=". Navigate to the website first, find the search box, and type into it.
-3. Only use tools that are directly requested or necessary to complete the user's specific task. Do not perform additional actions that were not asked for.
+3. When you are requested to describe an image, find 'img' element with tool and use its 'src' attribute as the imageUrl argument for 'describe_image' function.
 4. Think step by step: What did the user ask for? What is the minimum set of tools needed to accomplish this?
 5. If you need to search on a website:
    - First navigate to the website's main page
    - Then locate the search input field
    - Then type the search query into the field
    - Then submit the search (press Enter or click search button)
-6. Do not assume the user wants extra features or actions beyond their request.
 7. Refrain from using tools that are far from the behavior of the general user, such as 'chrome_inject_script'.
 8. If you fail to click a button or link, you can try to read the hyperlink on the element and navigate to that URL instead.
 9. Do not use 'newWindow: true' option in tool calls. User wants to keep all actions in the same window.
-10. When you are requested to analyze or explain an image, find 'img' element with 'chrome_get_web_content' tool and use its 'src' attribute as the imageUrl argument for 'describe_image' function.
+
 
 TTS-FRIENDLY OUTPUT GUIDELINES - Your responses will be converted to speech:
 1. Write in natural, conversational language as if speaking directly to someone
@@ -379,12 +380,35 @@ async function executeCustomFunction(
     try {
       console.log(`\n🖼️  Starting image analysis...`);
       console.log(`📍 Image URL: ${imageUrl}`);
-      console.log(`⏳ Calling OpenAI Vision API...`);
+      console.log(`⏳ Fetching image...`);
 
       // 실행 시간 측정 시작
       const startTime = Date.now();
 
-      // OpenAI Vision API 호출
+      // 이미지 fetch
+      const imageResponse = await fetch(imageUrl);
+      if (!imageResponse.ok) {
+        throw new Error(`Failed to fetch image: ${imageResponse.statusText}`);
+      }
+
+      // 이미지를 ArrayBuffer로 읽기
+      const imageBuffer = await imageResponse.arrayBuffer();
+
+      // Base64로 인코딩
+      const base64Image = Buffer.from(imageBuffer).toString("base64");
+
+      // Content-Type 감지 (없으면 기본값 사용)
+      const contentType =
+        imageResponse.headers.get("content-type") || "image/jpeg";
+
+      console.log(
+        `✅ Image fetched successfully (${(
+          imageBuffer.byteLength / 1024
+        ).toFixed(2)} KB)`
+      );
+      console.log(`📤 Sending to OpenAI Vision API...`);
+
+      // OpenAI Vision API 호출 (base64 이미지 사용)
       const visionResponse = await openai.chat.completions.create({
         model: "gpt-5-mini",
         messages: [
@@ -393,25 +417,33 @@ async function executeCustomFunction(
             content: [
               {
                 type: "text",
-                text: "Describe this image in detail. Focus on the main elements, colors, composition, and any text or important details visible in the image.",
+                text: "Describe this image in detail in Korean. Focus on the main elements, colors, composition, and any text or important details visible in the image.",
               },
               {
                 type: "image_url",
                 image_url: {
-                  url: imageUrl,
+                  url: `data:${contentType};base64,${base64Image}`,
                 },
               },
             ],
           },
         ],
-        max_tokens: 500,
       });
 
       const executionTime = Date.now() - startTime;
 
-      const description =
-        visionResponse.choices[0]?.message?.content ||
-        "Could not analyze the image.";
+      // 응답 구조 디버깅
+      console.log(
+        `🔍 Vision Response:`,
+        JSON.stringify(visionResponse, null, 2).substring(0, 500)
+      );
+
+      const message = visionResponse.choices?.[0]?.message;
+      const description = message?.content || "Could not analyze the image.";
+
+      if (!message?.content) {
+        console.warn(`⚠️ No content in vision response. Message:`, message);
+      }
 
       console.log(`✅ Image analysis complete!`);
       console.log(`⏱️  Execution time: ${executionTime}ms`);
